@@ -1,0 +1,8 @@
+# Vim swap Files
+*.swp
+*.swo
+*.swn
+
+# project
+.idea/
+target/
