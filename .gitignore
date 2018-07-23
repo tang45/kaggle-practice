@@ -6,3 +6,6 @@
 # project
 .idea/
 target/
+
+# Mac Os
+.DS_Store
