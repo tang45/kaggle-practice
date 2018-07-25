@@ -17,15 +17,18 @@ import org.apache.spark.sql.DataFrame
 object SurviveStat {
   def main(args: Array[String]) {
 
-    val sparkSession = SparkSession.builder.
-      master("local[4]")
-      .appName("example")
+    val sparkSession = SparkSession.builder
+      .master("local[4]")
+      .appName("titanic")
       .getOrCreate()
 
     sparkSession.sparkContext.setLogLevel("ERROR")
 
     //load train df
-    val df = sparkSession.read.option("header", "true").option("inferSchema", "true").csv("data/titanic/train.csv")
+    val df = sparkSession.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv("data/titanic/train.csv")
 
     //handle missing values
     val meanValue = df.agg(mean(df("Age"))).first.getDouble(0)
@@ -41,33 +44,63 @@ object SurviveStat {
     val pClassStages = handleCategorical("Pclass")
 
     //columns for training
-    val cols = Array("Sex_onehot", "Embarked_onehot", "Pclass_onehot", "SibSp", "Parch", "Age", "Fare")
-    val vectorAssembler = new VectorAssembler().setInputCols(cols).setOutputCol("features")
+    val cols = Array("Sex_onehot",
+                     "Embarked_onehot",
+                     "Pclass_onehot",
+                     "SibSp",
+                     "Parch",
+                     "Age",
+                     "Fare")
+    val vectorAssembler =
+      new VectorAssembler().setInputCols(cols).setOutputCol("features")
 
     //algorithm stage
     val randomForestClassifier = new RandomForestClassifier()
     //pipeline
-    val preProcessStages = genderStages ++ embarkedStages ++ pClassStages ++ Array(vectorAssembler)
-    val pipeline = new Pipeline().setStages(preProcessStages ++ Array(randomForestClassifier))
+    val preProcessStages = genderStages ++ embarkedStages ++ pClassStages ++ Array(
+      vectorAssembler)
+    val pipeline = new Pipeline()
+      .setStages(preProcessStages ++ Array(randomForestClassifier))
 
     val model = pipeline.fit(trainDf)
-    println("train accuracy with pipeline" + accuracyScore(model.transform(trainDf), "label", "prediction"))
-    println("test accuracy with pipeline" + accuracyScore(model.transform(crossDf), "Survived", "prediction"))
+    println(
+      "train accuracy with pipeline" + accuracyScore(model.transform(trainDf),
+                                                     "label",
+                                                     "prediction"))
+    println(
+      "test accuracy with pipeline" + accuracyScore(model.transform(crossDf),
+                                                    "Survived",
+                                                    "prediction"))
 
     //cross validation
     val paramMap = new ParamGridBuilder()
       .addGrid(randomForestClassifier.impurity, Array("gini", "entropy"))
-      .addGrid(randomForestClassifier.maxDepth, Array(1,2,5, 10, 15))
-      .addGrid(randomForestClassifier.minInstancesPerNode, Array(1, 2, 4,5,10))
+      .addGrid(randomForestClassifier.maxDepth, Array(1, 2, 5, 10, 15))
+      .addGrid(randomForestClassifier.minInstancesPerNode,
+               Array(1, 2, 4, 5, 10))
       .build()
 
     val cvModel = crossValidation(pipeline, paramMap, trainDf)
-    println("train accuracy with cross validation" + accuracyScore(cvModel.transform(trainDf), "label", "prediction"))
-    println("test accuracy with cross validation " + accuracyScore(cvModel.transform(crossDf), "Survived", "prediction"))
+    println(
+      "train accuracy with cross validation" + accuracyScore(
+        cvModel.transform(trainDf),
+        "label",
+        "prediction"))
+    println(
+      "test accuracy with cross validation" + accuracyScore(
+        cvModel.transform(crossDf),
+        "Survived",
+        "prediction"))
 
-    val testDf = sparkSession.read.option("header", "true").option("inferSchema", "true").csv("data/titanic/test.csv")
+    val testDf = sparkSession.read
+      .option("header", "true")
+      .option("inferSchema", "true")
+      .csv("data/titanic/test.csv")
     val fareMeanValue = df.agg(mean(df("Fare"))).first.getDouble(0)
-    val fixedOutputDf = testDf.na.fill(meanValue, Array("age")).na.fill(fareMeanValue, Array("Fare"))
+    val fixedOutputDf = testDf.na
+      .fill(meanValue, Array("age"))
+      .na
+      .fill(fareMeanValue, Array("Fare"))
 
     generateOutputFile(fixedOutputDf, cvModel)
   }
@@ -75,11 +108,19 @@ object SurviveStat {
   def generateOutputFile(testDF: DataFrame, model: Model[_]) = {
     val scoredDf = model.transform(testDF)
     val outputDf = scoredDf.select("PassengerId", "prediction")
-    val castedDf = outputDf.select(outputDf("PassengerId"), outputDf("prediction").cast(IntegerType).as("Survived"))
-    castedDf.write.format("csv").option("header", "true").mode(SaveMode.Append).save("data/titanic/")
+    val castedDf = outputDf.select(
+      outputDf("PassengerId"),
+      outputDf("prediction").cast(IntegerType).as("Survived"))
+    castedDf.write
+      .format("csv")
+      .option("header", "true")
+      .mode(SaveMode.Append)
+      .save("data/titanic/")
   }
 
-  def crossValidation(pipeline: Pipeline, paramMap: Array[ParamMap], df: DataFrame): Model[_] = {
+  def crossValidation(pipeline: Pipeline,
+                      paramMap: Array[ParamMap],
+                      df: DataFrame): Model[_] = {
     val cv = new CrossValidator()
       .setEstimator(pipeline)
       .setEvaluator(new BinaryClassificationEvaluator)
@@ -89,15 +130,21 @@ object SurviveStat {
   }
 
   def handleCategorical(column: String): Array[PipelineStage] = {
-    val stringIndexer = new StringIndexer().setInputCol(column)
+    val stringIndexer = new StringIndexer()
+      .setInputCol(column)
       .setOutputCol(s"${column}_index")
       .setHandleInvalid("skip")
-    val oneHot = new OneHotEncoder().setInputCol(s"${column}_index").setOutputCol(s"${column}_onehot")
+    val oneHot = new OneHotEncoder()
+      .setInputCol(s"${column}_index")
+      .setOutputCol(s"${column}_onehot")
     Array(stringIndexer, oneHot)
   }
 
   def accuracyScore(df: DataFrame, label: String, predictCol: String) = {
-    val rdd = df.select(predictCol,label).rdd.map(row ⇒ (row.getDouble(0), row.getInt(1).toDouble))
+    val rdd = df
+      .select(predictCol, label)
+      .rdd
+      .map(row ⇒ (row.getDouble(0), row.getInt(1).toDouble))
     new MulticlassMetrics(rdd).accuracy
   }
 }
