@@ -18,7 +18,7 @@ object SurviveStat {
   def main(args: Array[String]) {
 
     val sparkSession = SparkSession.builder
-      .master("local[4]")
+      .master("local[*]")
       .appName("titanic")
       .getOrCreate()
 
@@ -33,8 +33,47 @@ object SurviveStat {
     //handle missing values
     val meanValue = df.agg(mean(df("Age"))).first.getDouble(0)
     val fixedDf = df.na.fill(meanValue, Array("Age"))
+
+    //extract and transfer values
+    val extractDf =
+      fixedDf.withColumn("Name",
+                         regexp_extract(col("Name"), "(, )([^\\.]+)", 2))
+    val transformName = udf { (name: String) =>
+      if (name == "Jonkheer")
+        "Master"
+      else if (name == "Ms")
+        "Miss"
+      else if (name == "Mlle")
+        "Miss"
+      else if (name == "Mme")
+        "Mrs"
+      else if (name == "Dona")
+        "Mrs"
+      else if (name == "Lady")
+        "Mrs"
+      else if (name == "the Countess")
+        "Mrs"
+      else if (name == "Capt")
+        "Mr"
+      else if (name == "Don")
+        "Mr"
+      else if (name == "Major")
+        "Mr"
+      else if (name == "Col")
+        "Mr"
+      else if (name == "Sir")
+        "Mr"
+      else if (name == "Capt")
+        "DrAndRev"
+      else if (name == "Rev")
+        "DrAndRev"
+      else name
+    }
+    val transferDf =
+      extractDf.withColumn("Name", transformName(col("Name")))
+
     //test and train split
-    val dfs = fixedDf.randomSplit(Array(0.7, 0.3))
+    val dfs = transferDf.randomSplit(Array(0.7, 0.3))
     val trainDf = dfs(0).withColumnRenamed("Survived", "label")
     val crossDf = dfs(1)
 
@@ -42,11 +81,13 @@ object SurviveStat {
     val genderStages = handleCategorical("Sex")
     val embarkedStages = handleCategorical("Embarked")
     val pClassStages = handleCategorical("Pclass")
+    val nameStages = handleCategorical("Name")
 
     //columns for training
     val cols = Array("Sex_onehot",
                      "Embarked_onehot",
                      "Pclass_onehot",
+                     "Name_onehot",
                      "SibSp",
                      "Parch",
                      "Age",
@@ -57,20 +98,19 @@ object SurviveStat {
     //algorithm stage
     val randomForestClassifier = new RandomForestClassifier()
     //pipeline
-    val preProcessStages = genderStages ++ embarkedStages ++ pClassStages ++ Array(
-      vectorAssembler)
+    val preProcessStages = nameStages ++ genderStages ++ embarkedStages ++ pClassStages ++ Array(vectorAssembler)
     val pipeline = new Pipeline()
       .setStages(preProcessStages ++ Array(randomForestClassifier))
 
     val model = pipeline.fit(trainDf)
     println(
-      "train accuracy with pipeline" + accuracyScore(model.transform(trainDf),
-                                                     "label",
-                                                     "prediction"))
+      "train accuracy with pipeline: " + accuracyScore(model.transform(trainDf),
+                                                       "label",
+                                                       "prediction"))
     println(
-      "test accuracy with pipeline" + accuracyScore(model.transform(crossDf),
-                                                    "Survived",
-                                                    "prediction"))
+      "test accuracy with pipeline: " + accuracyScore(model.transform(crossDf),
+                                                      "Survived",
+                                                      "prediction"))
 
     //cross validation
     val paramMap = new ParamGridBuilder()
@@ -82,12 +122,12 @@ object SurviveStat {
 
     val cvModel = crossValidation(pipeline, paramMap, trainDf)
     println(
-      "train accuracy with cross validation" + accuracyScore(
+      "train accuracy with cross validation: " + accuracyScore(
         cvModel.transform(trainDf),
         "label",
         "prediction"))
     println(
-      "test accuracy with cross validation" + accuracyScore(
+      "test accuracy with cross validation: " + accuracyScore(
         cvModel.transform(crossDf),
         "Survived",
         "prediction"))
@@ -96,13 +136,18 @@ object SurviveStat {
       .option("header", "true")
       .option("inferSchema", "true")
       .csv("data/titanic/test.csv")
+    val extractTestDf =
+      testDf.withColumn("Name",
+        regexp_extract(col("Name"), "(, )([^\\.]+)", 2))
+    val transferTestDf =
+      extractTestDf.withColumn("Name", transformName(col("Name")))
     val fareMeanValue = df.agg(mean(df("Fare"))).first.getDouble(0)
-    val fixedOutputDf = testDf.na
+    val fixedOutputDf = transferTestDf.na
       .fill(meanValue, Array("age"))
       .na
       .fill(fareMeanValue, Array("Fare"))
 
-    generateOutputFile(fixedOutputDf, cvModel)
+    generateOutputFile(fixedOutputDf, model)
   }
 
   def generateOutputFile(testDF: DataFrame, model: Model[_]) = {
